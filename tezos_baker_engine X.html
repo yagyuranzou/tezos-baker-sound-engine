@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tezos Baker Engine — Timeline Replay</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  body {
+    margin:0;
+    font-family:'Press Start 2P', monospace;
+    background:#000;
+    color:#00ff66;
+    padding:20px;
+  }
+
+  h1 { font-size:14px; margin:10px 0; }
+
+  .tag {
+    font-size:10px;
+    opacity:0.7;
+    margin-bottom:10px;
+  }
+
+  button {
+    padding:8px;
+    margin-right:8px;
+    font-size:10px;
+    background:#000;
+    color:#00ff66;
+    border:1px solid #00ff66;
+    cursor:pointer;
+  }
+
+  #controls {
+    display:grid;
+    grid-template-columns:repeat(2, 1fr);
+    gap:14px;
+    margin-top:15px;
+  }
+
+  .card {
+    border:1px solid #003300;
+    padding:14px;
+    background:rgba(0,0,0,0.7);
+    min-height:140px;
+  }
+
+  .title {
+    font-size:12px;
+    margin-bottom:10px;
+  }
+
+  .big {
+    font-size:11px;
+    margin-bottom:6px;
+    line-height:1.6;
+  }
+
+  .small {
+    font-size:9px;
+    opacity:0.85;
+    margin-bottom:8px;
+  }
+
+  input[type=range] {
+    width:100%;
+    accent-color:#00ff66;
+    margin-top:6px;
+  }
+
+  #log {
+    margin-top:10px;
+    border:1px solid #003300;
+    padding:12px;
+    height:180px;
+    overflow:auto;
+    background:#000;
+    font-size:13px;
+    line-height:1.7;
+  }
+
+  #timelineBox {
+    margin-top:15px;
+    border:1px solid #003300;
+    padding:10px;
+  }
+
+  #timeline {
+    width:100%;
+  }
+
+  #replayInfo {
+    font-size:10px;
+    margin-top:8px;
+    opacity:0.8;
+  }
+</style>
+</head>
+<body>
+
+<h1>TEZOS BAKER ENGINE</h1>
+<div class="tag">UNFILTERED SYSTEM</div>
+<div class="tag">delegation → consensus → sound → timeline</div>
+
+<button onclick="start()">START</button>
+<button onclick="stop()">STOP</button>
+<button onclick="playReplay()">REPLAY</button>
+<button onclick="stopReplay()">STOP REPLAY</button>
+
+<div id="controls"></div>
+
+<div id="timelineBox">
+  <input type="range" id="timeline" value="0" min="0" max="0" step="1">
+  <div id="replayInfo">timeline: 0</div>
+</div>
+
+<div id="log"></div>
+
+<script>
+let interval;
+let audioCtx;
+let history = [];
+let replayIndex = 0;
+let replayInterval = null;
+
+const bakers=[
+  {id:"A",freq:220,self:1,deleg:0,win:0},
+  {id:"B",freq:330,self:2,deleg:0,win:0},
+  {id:"C",freq:440,self:3,deleg:0,win:0},
+  {id:"D",freq:550,self:1,deleg:0,win:0}
+];
+
+const delegators=[
+  {id:"d1",amt:2,target:0},
+  {id:"d2",amt:3,target:1},
+  {id:"d3",amt:1,target:2}
+];
+
+function compute(){
+  bakers.forEach(b=>b.deleg=0);
+  delegators.forEach(d=>bakers[d.target].deleg+=d.amt);
+}
+
+function stake(b){return b.self+b.deleg;}
+
+function pick(){
+  compute();
+  let t=0;
+  let arr=bakers.map(b=>{let w=stake(b);if(b.win)w*=0.4;t+=w;return{b,w};});
+  let r=Math.random()*t;
+  for(let x of arr){if(r<x.w)return x.b;r-=x.w;}
+}
+
+function sound(f){
+  let o=audioCtx.createOscillator();
+  let g=audioCtx.createGain();
+  o.type="square";
+  o.frequency.value=f;
+  g.gain.value=0.08;
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start();o.stop(audioCtx.currentTime+0.12);
+}
+
+function tick(){
+  let w=pick();
+  bakers.forEach(b=>b.win=0);
+  w.win=1;
+
+  let event={id:w.id,freq:w.freq,stake:stake(w)};
+  history.push(event);
+
+  document.getElementById("log").innerText+=
+    `→ SLOT ${event.id} | stake ${event.stake}\n`;
+
+  sound(event.freq);
+  updateTimeline();
+  renderUI();
+}
+
+function updateTimeline(){
+  let t=document.getElementById("timeline");
+  t.max=history.length-1;
+  t.value=history.length-1;
+  document.getElementById("replayInfo").innerText="timeline: " + history.length;
+}
+
+function renderUI(){
+  let c=document.getElementById("controls");
+  c.innerHTML="";
+
+  bakers.forEach((b,i)=>{
+    let d=document.createElement("div");
+    d.className="card";
+
+    d.innerHTML=`
+      <div class="title">SLOT ${b.id}</div>
+      <div class="big">FREQ: ${b.freq} Hz</div>
+      <div class="big">SELF STAKE: ${b.self}</div>
+      <div class="big">DELEGATED: ${b.deleg}</div>
+      <div class="big">TOTAL: ${stake(b)}</div>
+      <input type="range" min="1" max="10" value="${b.self}" id="s${i}">
+    `;
+
+    c.appendChild(d);
+
+    document.getElementById("s"+i).oninput=(e)=>b.self=parseInt(e.target.value);
+  });
+}
+
+function start(){audioCtx=new AudioContext();interval=setInterval(tick,400);}
+function stop(){clearInterval(interval);}
+
+function playReplay(){
+  if(history.length===0)return;
+  stop();
+  replayIndex=0;
+
+  replayInterval=setInterval(()=>{
+    if(replayIndex>=history.length){clearInterval(replayInterval);return;}
+
+    let e=history[replayIndex];
+
+    document.getElementById("log").innerText+=
+      `[REPLAY SLOT ${e.id}] stake ${e.stake}\n`;
+
+    sound(e.freq);
+    document.getElementById("timeline").value=replayIndex;
+    document.getElementById("replayInfo").innerText="replay: " + replayIndex;
+
+    replayIndex++;
+  },300);
+}
+
+function stopReplay(){clearInterval(replayInterval);}
+
+renderUI();
+</script>
+
+</body>
+</html>
